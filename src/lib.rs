@@ -2,7 +2,11 @@ use std::ffi::OsString;
 use std::fs::{self, DirEntry};
 use std::io::{self, Error};
 use std::path::Path;
-
+use std::time::Instant;
+use dialoguer::{
+    Select,
+    theme::ColorfulTheme
+};
 pub mod graph {
     use crate::file_analyzer::Node;
     use std::fmt::Write;
@@ -40,11 +44,24 @@ pub mod graph {
             println!("{}", s);
             Ok(())
         }
+        pub fn get_parents(&self, mut index: usize) -> Vec<usize> {
+            let mut v: Vec<usize> = Vec::new();
+            loop {
+                let relation = self.relations.iter().find(|f| f.children.contains(&index));
+                match relation {
+                    Some(r) => {
+                        v.push(r.parent);
+                        index = r.parent;
+                    }
+                    None => break,
+                }
+            }
+            v
+        }
         ///
         /// Find the largest file and return its size, name and parent folder
         pub fn largest_file(&self) -> (String, String, u64) {
             let mut s = 0u64;
-            // let mut st = String::new();
             let mut index: Option<usize> = None;
             for f in self.elements.iter().enumerate() {
                 if f.1.size > s {
@@ -52,23 +69,19 @@ pub mod graph {
                     index = Some(f.0);
                 }
             }
-            let n = self.elements.get(index.unwrap()).unwrap();
+            let index = match index {
+                Some(n) => n,
+                None => {
+                    panic!("invalid index.");
+                }
+            };
+            let n = self.elements.get(index).unwrap();
             let s = n.size;
             let st = n.name.clone();
             let mut dir_path: Vec<String> = Vec::new();
-            loop {
-                let relation = self
-                    .relations
-                    .iter()
-                    .find(|f| f.children.contains(&index.unwrap()));
-                match relation {
-                    Some(r) => {
-                        let parent_folder = self.elements.get(r.parent).unwrap().name.clone();
-                        dir_path.push(parent_folder);
-                        index = Some(r.parent);
-                    }
-                    None => break,
-                }
+            let parents = self.get_parents(index);
+            for p in parents {
+                dir_path.push(self.elements.get(p).unwrap().name.clone());
             }
             let dir_path: String = dir_path
                 .iter()
@@ -76,7 +89,7 @@ pub mod graph {
                 .map(|s| {
                     let mut s = s.clone();
                     s.push('/');
-                    return s;
+                    s
                 })
                 .collect();
             (dir_path, st, s)
@@ -85,20 +98,17 @@ pub mod graph {
         pub fn push(&mut self, n: Node, i: Option<usize>) -> usize {
             self.elements.push(n);
             let new_ind: usize = self.elements.len() - 1;
-            match i {
-                Some(i) => {
-                    let a = self.relations.iter_mut().find(|v| v.parent == i);
-                    match a {
-                        Some(a) => {
-                            a.children.push(new_ind);
-                        }
-                        None => self.relations.push(Relation {
-                            parent: i,
-                            children: vec![new_ind],
-                        }),
-                    };
-                }
-                None => (),
+            if let Some(i) = i {
+                let a = self.relations.iter_mut().find(|v| v.parent == i);
+                match a {
+                    Some(a) => {
+                        a.children.push(new_ind);
+                    }
+                    None => self.relations.push(Relation {
+                        parent: i,
+                        children: vec![new_ind],
+                    }),
+                };
             };
             new_ind
         }
@@ -149,13 +159,30 @@ pub mod file_analyzer {
             ..Default::default()
         };
         db.push(node, None);
+        let now = Instant::now();
         get_nodes(Path::new(&root), 0, &mut db)?;
+        let elapsed = now.elapsed();
+        println!("Gathered: {:.2?}", elapsed);
         println!(
             "Length of data and relations: {}, {}",
             db.elements_len(),
             db.relations_len()
         );
+        let now = Instant::now();
         println!("{:#?}", db.largest_file());
+        let elapsed = now.elapsed();
+        println!("Largest: {:.2?}", elapsed);
+
+        let items = vec!["Item 1", "item 2"];
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .items(&items)
+            .default(0)
+            .interact_opt()?;
+
+        match selection {
+            Some(index) => println!("User selected item : {}", items[index]),
+            None => println!("User did not select anything")
+    }
         Ok(())
     }
 
@@ -164,13 +191,13 @@ pub mod file_analyzer {
         let size = path.metadata().unwrap().len();
         let name = dir.file_name().into_string().unwrap();
         let is_dir = path.is_dir();
-        return Ok(Node {
+        Ok(Node {
             name,
             size: size,
             // path: OsString::from(&path),
             is_dir,
             ..Default::default()
-        });
+        })
     }
 
     pub fn get_nodes(dir: &Path, parent_index: usize, db: &mut Graph) -> io::Result<()> {
