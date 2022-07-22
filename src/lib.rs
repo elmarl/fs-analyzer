@@ -3,6 +3,7 @@ use std::fs::{self, DirEntry};
 use std::io::{self, Error};
 use std::path::Path;
 use std::time::Instant;
+// todo
 // use dialoguer::{
 //     Select,
 //     theme::ColorfulTheme
@@ -11,6 +12,8 @@ pub mod graph {
     use crate::file_analyzer::Node;
     use std::{fmt::Write};
 
+    /// Data structure where elements are all in a single vector.
+    /// Relations are defined in a separate vector, similar to a graph.
     pub struct Graph {
         elements: Vec<Node>,
         relations: Vec<Relation>,
@@ -72,8 +75,9 @@ pub mod graph {
             min_i
         }
         ///
-        /// Find the largest file and return its size, name and parent folder
-        /// num - number of files to show, sorted by size descending
+        /// Find num=5 amount of largest files and return its size, name and parent folder
+        /// num - number of files to show,
+        /// sorted by size descending
         pub fn largest_file(&self, mut num: u8) -> Vec<(String, String, u64)> {
             if num > self.elements.len() as u8 {
                 num = self.elements.len() as u8;
@@ -82,6 +86,7 @@ pub mod graph {
             for _ in 0..num {
                 index_value_map.push((0,0));
             }
+            // Keep track of largest files by a index, size map. 
             for f in self.elements.iter().enumerate() {
                 let min_index = Self::get_smallest_index(&index_value_map);
                 if f.1.size > index_value_map[min_index].1 {
@@ -150,7 +155,7 @@ pub mod file_analyzer {
         None(),
     }
 
-    /// File descriptior
+    /// File descriptor
     pub struct Node {
         pub name: String,             // name of file
         pub path: std::ffi::OsString, // path to file (platform independent)
@@ -173,6 +178,7 @@ pub mod file_analyzer {
         }
     }
 
+    /// begin finding files and get the top largest.
     pub fn start(root: OsString, num: u8) -> Result<(), Error> {
         let mut db = Graph::new();
         let node = Node {
