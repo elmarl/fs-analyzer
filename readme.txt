@@ -1,8 +1,5 @@
-keeping track of only files inefficient, much repetition in path strings
+This app takes a path to a directory as input and gives you the top 5 largest files in the given directory. 
 
-C:/Desktop/rand/T/1.jpg
-C:/Desktop/rand/T/2.jpg
-...
+Results are given as the path to the file, its name and the size in bytes.
 
-Keep track of folder as well. Build file path by traversing data structure down to leaf node.
-
+The number of files to list can be changed with the --num option.

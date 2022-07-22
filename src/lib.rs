@@ -3,13 +3,13 @@ use std::fs::{self, DirEntry};
 use std::io::{self, Error};
 use std::path::Path;
 use std::time::Instant;
-use dialoguer::{
-    Select,
-    theme::ColorfulTheme
-};
+// use dialoguer::{
+//     Select,
+//     theme::ColorfulTheme
+// };
 pub mod graph {
     use crate::file_analyzer::Node;
-    use std::fmt::Write;
+    use std::{fmt::Write};
 
     pub struct Graph {
         elements: Vec<Node>,
@@ -58,32 +58,50 @@ pub mod graph {
             }
             v
         }
+
+        #[inline(always)]
+        pub fn get_smallest_index(index_value_map: &Vec<(usize, u64)>) -> usize {
+            let mut min_i = 0;
+            let mut min_value = index_value_map[min_i].1;
+            for (i, &item) in index_value_map.iter().enumerate().skip(1) {
+                if item.1 < min_value {
+                    min_i = i;
+                    min_value = item.1;
+                }
+            }
+            min_i
+        }
         ///
         /// Find the largest file and return its size, name and parent folder
-        pub fn largest_file(&self) -> (String, String, u64) {
-            let mut s = 0u64;
-            let mut index: Option<usize> = None;
+        /// num - number of files to show, sorted by size descending
+        pub fn largest_file(&self, mut num: u8) -> Vec<(String, String, u64)> {
+            if num > self.elements.len() as u8 {
+                num = self.elements.len() as u8;
+            }
+            let mut index_value_map: Vec<(usize, u64)> = Vec::new();
+            for _ in 0..num {
+                index_value_map.push((0,0));
+            }
             for f in self.elements.iter().enumerate() {
-                if f.1.size > s {
-                    s = f.1.size;
-                    index = Some(f.0);
+                let min_index = Self::get_smallest_index(&index_value_map);
+                if f.1.size > index_value_map[min_index].1 {
+                    index_value_map[min_index].0 = f.0;
+                    index_value_map[min_index].1 = f.1.size;
                 }
             }
-            let index = match index {
-                Some(n) => n,
-                None => {
-                    panic!("invalid index.");
-                }
-            };
-            let n = self.elements.get(index).unwrap();
-            let s = n.size;
-            let st = n.name.clone();
-            let mut dir_path: Vec<String> = Vec::new();
-            let parents = self.get_parents(index);
-            for p in parents {
-                dir_path.push(self.elements.get(p).unwrap().name.clone());
+            if index_value_map.len() == 0 {
+                panic!("Couldn't sort files.")
             }
-            let dir_path: String = dir_path
+            let mut results: Vec<(String, String, u64)> = Vec::new();
+            for item in index_value_map {
+                let n = self.elements.get(item.0).unwrap();
+                let st = n.name.clone();
+                let mut dir_path: Vec<String> = Vec::new();
+                let parents = self.get_parents(item.0);
+                for p in parents {
+                    dir_path.push(self.elements.get(p).unwrap().name.clone());
+                }
+                let dir_path: String = dir_path
                 .iter()
                 .rev()
                 .map(|s| {
@@ -92,7 +110,11 @@ pub mod graph {
                     s
                 })
                 .collect();
-            (dir_path, st, s)
+                results.push((dir_path, st, item.1));
+            }
+            results.sort_by_key(|f| f.2);
+            results.reverse();
+            results
         }
 
         pub fn push(&mut self, n: Node, i: Option<usize>) -> usize {
@@ -151,7 +173,7 @@ pub mod file_analyzer {
         }
     }
 
-    pub fn start(root: OsString) -> Result<(), Error> {
+    pub fn start(root: OsString, num: u8) -> Result<(), Error> {
         let mut db = Graph::new();
         let node = Node {
             path: OsString::from(&root),
@@ -169,20 +191,24 @@ pub mod file_analyzer {
             db.relations_len()
         );
         let now = Instant::now();
-        println!("{:#?}", db.largest_file());
+        let largest_files = db.largest_file(num);
+        for i in largest_files {
+            println!("{:#?}", i);
+        }
         let elapsed = now.elapsed();
         println!("Largest: {:.2?}", elapsed);
 
-        let items = vec!["Item 1", "item 2"];
-        let selection = Select::with_theme(&ColorfulTheme::default())
-            .items(&items)
-            .default(0)
-            .interact_opt()?;
+        // todo
+        // let items = vec!["Item 1", "item 2"];
+        // let selection = Select::with_theme(&ColorfulTheme::default())
+        //     .items(&items)
+        //     .default(0)
+        //     .interact_opt()?;
 
-        match selection {
-            Some(index) => println!("User selected item : {}", items[index]),
-            None => println!("User did not select anything")
-    }
+        // match selection {
+        //     Some(index) => println!("User selected item : {}", items[index]),
+        //     None => println!("User did not select anything")
+        // }
         Ok(())
     }
 
