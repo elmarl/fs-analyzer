@@ -19,34 +19,32 @@ pub mod graph {
         relations: Vec<Relation>,
     }
 
+    /// Struct that defines relationships for each Graph::elements item (file or folder). parent is a folder, children can be either folders or files.
     struct Relation {
         parent: usize,
         children: Vec<usize>,
     }
     impl Graph {
+        /// Create a new empty Graph.
         pub fn new() -> Graph {
             Graph {
                 elements: Vec::new(),
                 relations: Vec::new(),
             }
         }
+
+        /// Get the number of elements
         pub fn elements_len(&self) -> usize {
             self.elements.len()
         }
+
+        /// Get the number of relations
         pub fn relations_len(&self) -> usize {
             self.relations.len()
         }
-        pub fn print_rel(&self, mut len: usize) -> Result<(), std::fmt::Error> {
-            let mut s = String::new();
-            if self.relations.len() < len {
-                len = self.relations.len();
-            }
-            for i in 0..len {
-                write!(&mut s, "{}", i)?;
-            }
-            println!("{}", s);
-            Ok(())
-        }
+
+        /// Get the indexes of parents for the parent at the given index.
+        #[inline(always)]
         pub fn get_parents(&self, mut index: usize) -> Vec<usize> {
             let mut v: Vec<usize> = Vec::new();
             loop {
@@ -62,6 +60,7 @@ pub mod graph {
             v
         }
 
+        /// Get the index of the smallest element (by it's size field) and return it.
         #[inline(always)]
         pub fn get_smallest_index(index_value_map: &Vec<(usize, u64)>) -> usize {
             let mut min_i = 0;
@@ -74,7 +73,6 @@ pub mod graph {
             }
             min_i
         }
-        ///
         /// Find num=5 amount of largest files and return its size, name and parent folder
         /// num - number of files to show,
         /// sorted by size descending
@@ -86,7 +84,7 @@ pub mod graph {
             for _ in 0..num {
                 index_value_map.push((0,0));
             }
-            // Keep track of largest files by a index, size map. 
+            // Keep track of largest files by a vector of tuples: (index, size). 
             for f in self.elements.iter().enumerate() {
                 let min_index = Self::get_smallest_index(&index_value_map);
                 if f.1.size > index_value_map[min_index].1 {
@@ -122,6 +120,9 @@ pub mod graph {
             results
         }
 
+        /// Push node n to elements vector. If the parent is given, 
+        /// try to find if the parent already has a relation and add the index of this new added element to it, 
+        /// otherwise create a new relation for this element and the parent.
         pub fn push(&mut self, n: Node, i: Option<usize>) -> usize {
             self.elements.push(n);
             let new_ind: usize = self.elements.len() - 1;
@@ -155,7 +156,7 @@ pub mod file_analyzer {
         None(),
     }
 
-    /// File descriptor
+    /// File descriptor struct. Includes fields that can be used in the future to filter and sort the results.
     pub struct Node {
         pub name: String,             // name of file
         pub path: std::ffi::OsString, // path to file (platform independent)
@@ -218,6 +219,8 @@ pub mod file_analyzer {
         Ok(())
     }
 
+
+    /// Creates and returns a Node.
     pub fn create_node(dir: &DirEntry) -> Result<Node, Error> {
         let path = dir.path();
         let size = path.metadata().unwrap().len();
@@ -225,13 +228,13 @@ pub mod file_analyzer {
         let is_dir = path.is_dir();
         Ok(Node {
             name,
-            size: size,
-            // path: OsString::from(&path),
+            size,
             is_dir,
             ..Default::default()
         })
     }
 
+    /// Scans the folder for both files and folders. For folders, calls itself recursively until no more folder is found.
     pub fn get_nodes(dir: &Path, parent_index: usize, db: &mut Graph) -> io::Result<()> {
         if dir.is_dir() {
             for entry in fs::read_dir(dir)? {
