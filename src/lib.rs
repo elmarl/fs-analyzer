@@ -1,58 +1,48 @@
+// lib.rs
 use std::fs::{self, DirEntry};
 use std::io::{self, Error};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use rayon::prelude::*;
 
 /// Graph module to manage the relationship between files and directories.
 pub mod graph {
     use crate::file_analyzer::Node;
-    use std::{cmp::Reverse, collections::BinaryHeap, path::PathBuf};
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    use std::path::PathBuf;
 
-    /// Represents a relationship between parent and child nodes.
-    struct Relation {
-        parent: usize,
-        children: Vec<usize>,
-    }
-
-    /// Data structure where elements are all in a single vector.
-    /// Relations are defined in a separate vector, similar to a graph.
+    /// Represents a data structure where each node knows its parent.
     pub struct Graph {
-        elements: Vec<Node>,
-        relations: Vec<Relation>,
+        nodes: Vec<Node>,
     }
 
     impl Graph {
         /// Creates a new empty Graph.
         pub fn new() -> Graph {
-            Graph {
-                elements: Vec::new(),
-                relations: Vec::new(),
-            }
+            Graph { nodes: Vec::new() }
         }
 
         /// Returns the number of elements in the graph.
         pub fn elements_len(&self) -> usize {
-            self.elements.len()
-        }
-
-        /// Returns the number of relations in the graph.
-        pub fn relations_len(&self) -> usize {
-            self.relations.len()
+            self.nodes.len()
         }
 
         /// Retrieves the indices of all parent nodes for a given node index.
         pub fn get_parents(&self, mut index: usize) -> Vec<usize> {
             let mut parents = Vec::new();
-            while let Some(relation) = self.relations.iter().find(|r| r.children.contains(&index)) {
-                parents.push(relation.parent);
-                index = relation.parent;
+            while let Some(parent) = self.nodes[index].parent {
+                parents.push(parent);
+                index = parent;
             }
             parents
         }
 
         /// Finds the top `num` largest files and returns their details.
-        pub fn largest_file(&self, num: usize) -> Vec<(String, String, u64)> {
+        pub fn largest_file(&self, num: usize) -> Vec<(PathBuf, String, u64)> {
             let mut heap = BinaryHeap::with_capacity(num);
-            for (idx, node) in self.elements.iter().enumerate() {
+            for (idx, node) in self.nodes.iter().enumerate() {
                 if !node.is_dir {
                     if heap.len() < num {
                         heap.push(Reverse((node.size, idx)));
@@ -65,15 +55,12 @@ pub mod graph {
 
             let mut results = Vec::with_capacity(heap.len());
             while let Some(Reverse((size, idx))) = heap.pop() {
-                let node = &self.elements[idx];
+                let node = &self.nodes[idx];
                 let parents = self.get_parents(idx);
                 let dir_path = parents
                     .iter()
                     .rev()
-                    .map(|&p| &self.elements[p].name)
-                    .collect::<PathBuf>()
-                    .display()
-                    .to_string();
+                    .fold(PathBuf::new(), |acc, &p| acc.join(&self.nodes[p].name));
 
                 results.push((dir_path, node.name.clone(), size));
             }
@@ -83,23 +70,10 @@ pub mod graph {
             results
         }
 
-        /// Adds a node to the graph and establishes its parent-child relationship.
-        pub fn push(&mut self, node: Node, parent_index: Option<usize>) -> usize {
-            self.elements.push(node);
-            let new_index = self.elements.len() - 1;
-
-            if let Some(parent) = parent_index {
-                if let Some(rel) = self.relations.iter_mut().find(|r| r.parent == parent) {
-                    rel.children.push(new_index);
-                } else {
-                    self.relations.push(Relation {
-                        parent,
-                        children: vec![new_index],
-                    });
-                }
-            }
-
-            new_index
+        /// Adds a node to the graph and returns its index.
+        pub fn push(&mut self, node: Node) -> usize {
+            self.nodes.push(node);
+            self.nodes.len() - 1
         }
     }
 }
@@ -109,20 +83,14 @@ pub mod file_analyzer {
     use super::*;
     use std::path::PathBuf;
 
-    /// Category of a file based on its type.
-    pub enum Category {
-        Media(String),
-        Game,
-        Text,
-        None,
-    }
-
     /// Represents a file or directory node.
+    #[derive(Debug)]
     pub struct Node {
-        pub name: String,  // Name of the file or directory
-        pub path: PathBuf, // Path to the file or directory
-        pub size: u64,     // Size in bytes
-        pub is_dir: bool,  // Is this node a directory
+        pub name: String,          // Name of the file or directory
+        pub path: PathBuf,         // Path to the file or directory
+        pub size: u64,             // Size in bytes
+        pub is_dir: bool,          // Is this node a directory
+        pub parent: Option<usize>, // Index of the parent node
     }
 
     impl Default for Node {
@@ -132,13 +100,15 @@ pub mod file_analyzer {
                 path: PathBuf::new(),
                 size: 0,
                 is_dir: false,
+                parent: None,
             }
         }
     }
 
     /// Begins the file analysis process.
     pub fn start(root: PathBuf, num: usize) -> Result<(), Error> {
-        let mut graph = Graph::new();
+        // Initialize a thread-safe Graph using Arc and Mutex
+        let graph = Arc::new(Mutex::new(Graph::new()));
         let root_node = Node {
             path: root.clone(),
             is_dir: true,
@@ -146,27 +116,32 @@ pub mod file_analyzer {
                 .file_name()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| root.to_string_lossy().into_owned()),
+            parent: None,
             ..Default::default()
         };
-        let root_index = graph.push(root_node, None);
+        let root_index = {
+            let mut graph_lock = graph.lock().unwrap();
+            graph_lock.push(root_node)
+        };
 
-        get_nodes(&root, root_index, &mut graph)?;
-        println!(
-            "Total elements: {}, Total relations: {}",
-            graph.elements_len(),
-            graph.relations_len()
-        );
+        get_nodes(&root, root_index, Arc::clone(&graph))?;
 
-        let largest_files = graph.largest_file(num);
+        // Acquire a lock to access the graph for listing largest files
+        let graph_lock = graph.lock().unwrap();
+        println!("Total elements: {}", graph_lock.elements_len(),);
+
+        let largest_files = graph_lock.largest_file(num);
+        drop(graph_lock);
+
         for (path, name, size) in largest_files {
-            println!("Size: {} bytes | Path: {}/{}", size, path, name);
+            println!("Size: {} bytes | Path: {}/{}", size, path.display(), name);
         }
 
         Ok(())
     }
 
     /// Creates and returns a `Node` from a directory entry.
-    pub fn create_node(dir: &DirEntry) -> Result<Node, Error> {
+    fn create_node(dir: &DirEntry, parent: Option<usize>) -> Result<Node, Error> {
         let path = dir.path();
         let metadata = match path.metadata() {
             Ok(meta) => meta,
@@ -191,36 +166,46 @@ pub mod file_analyzer {
             path: path.clone(),
             size,
             is_dir,
+            parent,
             ..Default::default()
         })
     }
 
     /// Recursively scans the directory and populates the graph with nodes.
-    pub fn get_nodes(dir: &Path, parent_index: usize, graph: &mut Graph) -> io::Result<()> {
-        if dir.is_dir() {
-            for entry_result in fs::read_dir(dir)? {
-                let entry = match entry_result {
-                    Ok(e) => e,
-                    Err(e) => {
-                        eprintln!("Failed to read directory entry: {}", e);
-                        continue;
-                    }
-                };
-
-                let path = entry.path();
-                let node = match create_node(&entry) {
-                    Ok(n) => n,
-                    Err(_) => continue, // Skip entries that failed to create a node
-                };
-
-                let current_index = graph.push(node, Some(parent_index));
-
-                if path.is_dir() {
-                    // Recursively scan subdirectories
-                    get_nodes(&path, current_index, graph)?;
-                }
-            }
+    fn get_nodes(dir: &Path, parent_index: usize, graph: Arc<Mutex<Graph>>) -> io::Result<()> {
+        if !dir.is_dir() {
+            return Ok(());
         }
+
+        let entries: Vec<DirEntry> = match fs::read_dir(dir) {
+            Ok(read_dir) => read_dir.filter_map(|e| e.ok()).collect(),
+            Err(e) => {
+                eprintln!("Failed to read directory {:?}: {}", dir, e);
+                return Err(e);
+            }
+        };
+
+        // Process entries in parallel
+        entries.par_iter().try_for_each(|entry| -> io::Result<()> {
+            let path = entry.path();
+            let node = match create_node(entry, Some(parent_index)) {
+                Ok(n) => n,
+                Err(_) => return Ok(()), // Skip entries that failed to create a node
+            };
+
+            let current_index = {
+                let mut graph_lock = graph.lock().unwrap();
+                graph_lock.push(node)
+            };
+
+            if path.is_dir() {
+                // Recursively scan subdirectories
+                get_nodes(&path, current_index, Arc::clone(&graph))?;
+            }
+
+            Ok(())
+        })?;
+
         Ok(())
     }
 }
