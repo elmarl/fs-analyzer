@@ -1,16 +1,17 @@
-use std::ffi::OsString;
 use std::fs::{self, DirEntry};
 use std::io::{self, Error};
 use std::path::Path;
-use std::time::Instant;
-// todo
-// use dialoguer::{
-//     Select,
-//     theme::ColorfulTheme
-// };
+
+/// Graph module to manage the relationship between files and directories.
 pub mod graph {
     use crate::file_analyzer::Node;
-    use std::{fmt::Write};
+    use std::{cmp::Reverse, collections::BinaryHeap, path::PathBuf};
+
+    /// Represents a relationship between parent and child nodes.
+    struct Relation {
+        parent: usize,
+        children: Vec<usize>,
+    }
 
     /// Data structure where elements are all in a single vector.
     /// Relations are defined in a separate vector, similar to a graph.
@@ -19,13 +20,8 @@ pub mod graph {
         relations: Vec<Relation>,
     }
 
-    /// Struct that defines relationships for each Graph::elements item (file or folder). parent is a folder, children can be either folders or files.
-    struct Relation {
-        parent: usize,
-        children: Vec<usize>,
-    }
     impl Graph {
-        /// Create a new empty Graph.
+        /// Creates a new empty Graph.
         pub fn new() -> Graph {
             Graph {
                 elements: Vec::new(),
@@ -33,220 +29,195 @@ pub mod graph {
             }
         }
 
-        /// Get the number of elements
+        /// Returns the number of elements in the graph.
         pub fn elements_len(&self) -> usize {
             self.elements.len()
         }
 
-        /// Get the number of relations
+        /// Returns the number of relations in the graph.
         pub fn relations_len(&self) -> usize {
             self.relations.len()
         }
 
-        /// Get the indexes of parents for the parent at the given index.
-        #[inline(always)]
+        /// Retrieves the indices of all parent nodes for a given node index.
         pub fn get_parents(&self, mut index: usize) -> Vec<usize> {
-            let mut v: Vec<usize> = Vec::new();
-            loop {
-                let relation = self.relations.iter().find(|f| f.children.contains(&index));
-                match relation {
-                    Some(r) => {
-                        v.push(r.parent);
-                        index = r.parent;
-                    }
-                    None => break,
-                }
+            let mut parents = Vec::new();
+            while let Some(relation) = self.relations.iter().find(|r| r.children.contains(&index)) {
+                parents.push(relation.parent);
+                index = relation.parent;
             }
-            v
+            parents
         }
 
-        /// Get the index of the smallest element (by it's size field) and return it.
-        #[inline(always)]
-        pub fn get_smallest_index(index_value_map: &Vec<(usize, u64)>) -> usize {
-            let mut min_i = 0;
-            let mut min_value = index_value_map[min_i].1;
-            for (i, &item) in index_value_map.iter().enumerate().skip(1) {
-                if item.1 < min_value {
-                    min_i = i;
-                    min_value = item.1;
+        /// Finds the top `num` largest files and returns their details.
+        pub fn largest_file(&self, num: usize) -> Vec<(String, String, u64)> {
+            let mut heap = BinaryHeap::with_capacity(num);
+            for (idx, node) in self.elements.iter().enumerate() {
+                if !node.is_dir {
+                    if heap.len() < num {
+                        heap.push(Reverse((node.size, idx)));
+                    } else if node.size > heap.peek().unwrap().0 .0 {
+                        heap.pop();
+                        heap.push(Reverse((node.size, idx)));
+                    }
                 }
             }
-            min_i
-        }
-        /// Find num=5 amount of largest files and return its size, name and parent folder
-        /// num - number of files to show,
-        /// sorted by size descending
-        pub fn largest_file(&self, mut num: u8) -> Vec<(String, String, u64)> {
-            if num > self.elements.len() as u8 {
-                num = self.elements.len() as u8;
+
+            let mut results = Vec::with_capacity(heap.len());
+            while let Some(Reverse((size, idx))) = heap.pop() {
+                let node = &self.elements[idx];
+                let parents = self.get_parents(idx);
+                let dir_path = parents
+                    .iter()
+                    .rev()
+                    .map(|&p| &self.elements[p].name)
+                    .collect::<PathBuf>()
+                    .display()
+                    .to_string();
+
+                results.push((dir_path, node.name.clone(), size));
             }
-            let mut index_value_map: Vec<(usize, u64)> = Vec::new();
-            for _ in 0..num {
-                index_value_map.push((0,0));
-            }
-            // Keep track of largest files by a vector of tuples: (index, size). 
-            for f in self.elements.iter().enumerate() {
-                let min_index = Self::get_smallest_index(&index_value_map);
-                if f.1.size > index_value_map[min_index].1 {
-                    index_value_map[min_index].0 = f.0;
-                    index_value_map[min_index].1 = f.1.size;
-                }
-            }
-            if index_value_map.len() == 0 {
-                panic!("Couldn't sort files.")
-            }
-            let mut results: Vec<(String, String, u64)> = Vec::new();
-            for item in index_value_map {
-                let n = self.elements.get(item.0).unwrap();
-                let st = n.name.clone();
-                let mut dir_path: Vec<String> = Vec::new();
-                let parents = self.get_parents(item.0);
-                for p in parents {
-                    dir_path.push(self.elements.get(p).unwrap().name.clone());
-                }
-                let dir_path: String = dir_path
-                .iter()
-                .rev()
-                .map(|s| {
-                    let mut s = s.clone();
-                    s.push('/');
-                    s
-                })
-                .collect();
-                results.push((dir_path, st, item.1));
-            }
-            results.sort_by_key(|f| f.2);
-            results.reverse();
+
+            // Sort results in descending order of size
+            results.sort_by(|a, b| b.2.cmp(&a.2));
             results
         }
 
-        /// Push node n to elements vector. If the parent is given, 
-        /// try to find if the parent already has a relation and add the index of this new added element to it, 
-        /// otherwise create a new relation for this element and the parent.
-        pub fn push(&mut self, n: Node, i: Option<usize>) -> usize {
-            self.elements.push(n);
-            let new_ind: usize = self.elements.len() - 1;
-            if let Some(i) = i {
-                let a = self.relations.iter_mut().find(|v| v.parent == i);
-                match a {
-                    Some(a) => {
-                        a.children.push(new_ind);
-                    }
-                    None => self.relations.push(Relation {
-                        parent: i,
-                        children: vec![new_ind],
-                    }),
-                };
-            };
-            new_ind
+        /// Adds a node to the graph and establishes its parent-child relationship.
+        pub fn push(&mut self, node: Node, parent_index: Option<usize>) -> usize {
+            self.elements.push(node);
+            let new_index = self.elements.len() - 1;
+
+            if let Some(parent) = parent_index {
+                if let Some(rel) = self.relations.iter_mut().find(|r| r.parent == parent) {
+                    rel.children.push(new_index);
+                } else {
+                    self.relations.push(Relation {
+                        parent,
+                        children: vec![new_index],
+                    });
+                }
+            }
+
+            new_index
         }
     }
 }
 
 pub mod file_analyzer {
-
     use super::graph::Graph;
     use super::*;
+    use std::path::PathBuf;
 
-    /// Category of file
+    /// Category of a file based on its type.
     pub enum Category {
         Media(String),
-        Game(),
-        Text(),
-        None(),
+        Game,
+        Text,
+        None,
     }
 
-    /// File descriptor struct. Includes fields that can be used in the future to filter and sort the results.
+    /// Represents a file or directory node.
     pub struct Node {
-        pub name: String,             // name of file
-        pub path: std::ffi::OsString, // path to file (platform independent)
-        pub size: u64,                // size in bytes of file
-        system: bool,                 // system file or similar, not safe to delete
-        category: Category,           // category of file
-        is_dir: bool,                 // is current node a dir
+        pub name: String,  // Name of the file or directory
+        pub path: PathBuf, // Path to the file or directory
+        pub size: u64,     // Size in bytes
+        pub is_dir: bool,  // Is this node a directory
     }
 
     impl Default for Node {
         fn default() -> Node {
             Node {
-                name: String::from(""),
-                path: OsString::from(""),
+                name: String::new(),
+                path: PathBuf::new(),
                 size: 0,
-                system: false,
-                category: Category::None(),
                 is_dir: false,
             }
         }
     }
 
-    /// begin finding files and get the top largest.
-    pub fn start(root: OsString, num: u8) -> Result<(), Error> {
-        let mut db = Graph::new();
-        let node = Node {
-            path: OsString::from(&root),
+    /// Begins the file analysis process.
+    pub fn start(root: PathBuf, num: usize) -> Result<(), Error> {
+        let mut graph = Graph::new();
+        let root_node = Node {
+            path: root.clone(),
             is_dir: true,
+            name: root
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.to_string_lossy().into_owned()),
             ..Default::default()
         };
-        db.push(node, None);
-        let now = Instant::now();
-        get_nodes(Path::new(&root), 0, &mut db)?;
-        let elapsed = now.elapsed();
-        println!("Gathered: {:.2?}", elapsed);
+        let root_index = graph.push(root_node, None);
+
+        get_nodes(&root, root_index, &mut graph)?;
         println!(
-            "Length of data and relations: {}, {}",
-            db.elements_len(),
-            db.relations_len()
+            "Total elements: {}, Total relations: {}",
+            graph.elements_len(),
+            graph.relations_len()
         );
-        let now = Instant::now();
-        let largest_files = db.largest_file(num);
-        for i in largest_files {
-            println!("{:#?}", i);
+
+        let largest_files = graph.largest_file(num);
+        for (path, name, size) in largest_files {
+            println!("Size: {} bytes | Path: {}/{}", size, path, name);
         }
-        let elapsed = now.elapsed();
-        println!("Largest: {:.2?}", elapsed);
 
-        // todo
-        // let items = vec!["Item 1", "item 2"];
-        // let selection = Select::with_theme(&ColorfulTheme::default())
-        //     .items(&items)
-        //     .default(0)
-        //     .interact_opt()?;
-
-        // match selection {
-        //     Some(index) => println!("User selected item : {}", items[index]),
-        //     None => println!("User did not select anything")
-        // }
         Ok(())
     }
 
-
-    /// Creates and returns a Node.
+    /// Creates and returns a `Node` from a directory entry.
     pub fn create_node(dir: &DirEntry) -> Result<Node, Error> {
         let path = dir.path();
-        let size = path.metadata().unwrap().len();
-        let name = dir.file_name().into_string().unwrap();
-        let is_dir = path.is_dir();
+        let metadata = match path.metadata() {
+            Ok(meta) => meta,
+            Err(e) => {
+                eprintln!("Failed to get metadata for {:?}: {}", path, e);
+                return Err(e);
+            }
+        };
+        let size = if metadata.is_file() {
+            metadata.len()
+        } else {
+            0
+        };
+        let name = dir
+            .file_name()
+            .into_string()
+            .unwrap_or_else(|_| "Invalid UTF-8".to_string());
+        let is_dir = metadata.is_dir();
+
         Ok(Node {
             name,
+            path: path.clone(),
             size,
             is_dir,
             ..Default::default()
         })
     }
 
-    /// Scans the folder for both files and folders. For folders, calls itself recursively until no more folder is found.
-    pub fn get_nodes(dir: &Path, parent_index: usize, db: &mut Graph) -> io::Result<()> {
+    /// Recursively scans the directory and populates the graph with nodes.
+    pub fn get_nodes(dir: &Path, parent_index: usize, graph: &mut Graph) -> io::Result<()> {
         if dir.is_dir() {
-            for entry in fs::read_dir(dir)? {
-                let entry = entry?;
+            for entry_result in fs::read_dir(dir)? {
+                let entry = match entry_result {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("Failed to read directory entry: {}", e);
+                        continue;
+                    }
+                };
 
                 let path = entry.path();
-                let n = create_node(&entry)?;
-                let child_index = db.push(n, Some(parent_index));
+                let node = match create_node(&entry) {
+                    Ok(n) => n,
+                    Err(_) => continue, // Skip entries that failed to create a node
+                };
+
+                let current_index = graph.push(node, Some(parent_index));
+
                 if path.is_dir() {
-                    get_nodes(&path, child_index, db)?;
-                } else {
-                    get_nodes(&path, parent_index, db)?;
+                    // Recursively scan subdirectories
+                    get_nodes(&path, current_index, graph)?;
                 }
             }
         }
