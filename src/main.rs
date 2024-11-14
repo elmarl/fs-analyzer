@@ -4,7 +4,6 @@ use std::{path::PathBuf, time::Instant};
 
 #[derive(Parser, Debug)]
 #[command(name = "File Lister")]
-#[command(author = "Your Name")]
 #[command(version = "1.0")]
 #[command(about = "Lists the largest files in a directory", long_about = None)]
 struct Args {
